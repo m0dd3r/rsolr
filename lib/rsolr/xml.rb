@@ -6,20 +6,25 @@ module RSolr::Xml
     
     # "attrs" is a hash for setting the "doc" xml attributes
     # "fields" is an array of Field objects
-    attr_accessor :attrs, :fields
+    attr_accessor :attrs, :fields, :children
 
     # "doc_hash" must be a Hash/Mash object
     # If a value in the "doc_hash" is an array,
     # a field object is created for each value...
     def initialize(doc_hash = {})
       @fields = []
+      @children = []
       doc_hash.each_pair do |field,values|
         # create a new field for each value (multi-valued)
         # put non-array values into an array
         values = [values] unless values.is_a?(Array)
         values.each do |v|
           next if v.to_s.empty?
-          @fields << RSolr::Xml::Field.new({:name=>field}, v.to_s)
+          if v.is_a?(Hash)
+            add_child(v)
+          else
+            add_field(field, v.to_s)
+          end
         end
       end
       @attrs={}
@@ -36,6 +41,22 @@ module RSolr::Xml
     end
 
     #
+    # Add a child doc to the document. 
+    #   doc: document or hash of field values to be created in the child doc
+    #   opts: field name and value for the field added to the parent doc to indicate it has children
+    # See https://cwiki.apache.org/confluence/display/solr/Uploading+Data+with+Index+Handlers#UploadingDatawithIndexHandlers-NestedChildDocuments
+    #
+    # === Example:
+    #
+    #   document.add_child({id: 3, name: "foobar"}, { parent_field_name: "isParent", parent_field_value: 'true'})
+    #
+    def add_child doc = {}, opts = {}
+      mark_as_parent(opts)
+      doc = RSolr::Xml::Document.new(doc) if doc.respond_to?(:each_pair)
+      @children << doc
+    end
+
+    #
     # Add a field value to the document. Options map directly to
     # XML attributes in the Solr <field> node.
     # See http://wiki.apache.org/solr/UpdateXmlMessages#head-8315b8028923d028950ff750a57ee22cbf7977c6
@@ -46,6 +67,21 @@ module RSolr::Xml
     #
     def add_field(name, value, options = {})
       @fields << RSolr::Xml::Field.new(options.merge({:name=>name}), value)
+    end
+
+    #
+    # Mark this document as a parent. Options provide parent field name and value.
+    # Defaults to content_type: "parentDocument"
+    # See http://wiki.apache.org/solr/UpdateXmlMessages#head-8315b8028923d028950ff750a57ee22cbf7977c6
+    #
+    # === Example:
+    #
+    #   document.mark_as_parent({parent_field_name: "isParent", parent_field_value: "true"})
+    #
+    def mark_as_parent(opts)
+      parent_field_name = opts.delete(:parent_field_name) || "content_type"
+      parent_field_value = opts.delete(:parent_field_value) || "parentDocument"
+      add_field(parent_field_name, parent_field_value) unless field_by_name(parent_field_name)
     end
     
   end
@@ -136,31 +172,24 @@ module RSolr::Xml
       build do |xml|
         xml.add(add_attrs) do |add_node|
           data.each do |doc|
-            doc = RSolr::Xml::Document.new(doc) if doc.respond_to?(:each_pair)
-            yield doc if block_given?
-            doc_node_builder = lambda do |doc_node|
-              doc.fields.each do |field_obj|
-                doc_node.field field_obj.value, field_obj.attrs
-              end
-            end
-            self.class.use_nokogiri ? add_node.doc_(doc.attrs,&doc_node_builder) : add_node.doc(doc.attrs,&doc_node_builder)
+            add_doc(doc, add_node, &block)
           end
         end
       end
     end
-    
+
     # generates a <commit/> message
     def commit opts = nil
       opts ||= {}
       build {|xml| xml.commit(opts) }
     end
-    
+
     # generates a <optimize/> message
     def optimize opts = nil
       opts ||= {}
       build {|xml| xml.optimize(opts) }
     end
-    
+
     # generates a <rollback/> message
     def rollback
       build {|xml| xml.rollback({}) }
@@ -189,7 +218,23 @@ module RSolr::Xml
         end
       end
     end
-    
+
+    private
+
+    def add_doc doc, add_node, &block
+      doc = RSolr::Xml::Document.new(doc) if doc.respond_to?(:each_pair)
+      yield doc if block_given?
+      doc_node_builder = lambda do |doc_node|
+        doc.fields.each do |field_obj|
+          doc_node.field field_obj.value, field_obj.attrs
+        end
+        doc.children.each do |child_obj|
+          add_doc(child_obj, doc_node, &block)
+        end
+      end
+      self.class.use_nokogiri ? add_node.doc_(doc.attrs,&doc_node_builder) : add_node.doc(doc.attrs,&doc_node_builder)
+    end
+
   end
-  
+
 end

@@ -102,6 +102,24 @@ describe "RSolr::Xml" do
           expect(result).to match(/<field name="name">matt2<\/field>/)
         end
 
+        # add a single hash ("doc") with child
+        it 'should create an add from a hash with children for nested hashes' do
+          data = {
+            :id=>1,
+            :name=>'matt',
+            :anything => {
+              :id => 2,
+              :name => 'abigail'
+            }
+          }
+          result = generator.add(data)
+          expect(result).to match(/<field name="content_type">parentDocument<\/field>/)
+          expect(result).to match(/<field name="name">matt<\/field>/)
+          expect(result).to match(/<field name="id">1<\/field>/)
+          expect(result).to match(/<doc><field name="id">2<\/field>/)
+          expect(result).to match Regexp.escape('abigail</field></doc>')
+        end
+
         it 'should create an add from a single Message::Document' do
           document = RSolr::Xml::Document.new
           document.add_field('id', 1)
@@ -113,7 +131,31 @@ describe "RSolr::Xml" do
           expect(result).to match Regexp.escape('name="name"')
           expect(result).to match Regexp.escape('matt</field>')
         end
-    
+
+        it 'should create an add from a single Message::Document with child Message::Documents' do
+          document = RSolr::Xml::Document.new
+          child = RSolr::Xml::Document.new
+          child.add_field('id', 2)
+          child.add_field('name', 'abigail', :boost => 3.0)
+          document.add_child(child)
+          result = generator.add(document)
+          expect(result).to match(Regexp.escape('<?xml version="1.0" encoding="UTF-8"?>'))
+          expect(result).to match(/<field name="content_type">parentDocument<\/field>/)
+          expect(result).to match(/<doc><field name="id">2<\/field>/)
+          expect(result).to match Regexp.escape('boost="3.0"')
+          expect(result).to match Regexp.escape('name="name"')
+          expect(result).to match Regexp.escape('abigail</field></doc>')
+        end
+
+        it 'should allow specification of the parent doc field value' do
+          document = RSolr::Xml::Document.new
+          child = RSolr::Xml::Document.new
+          child.add_field('id', 2)
+          document.add_child(child, { parent_field_name: 'parent_doc', parent_field_value: 'true' })
+          result = generator.add(document)
+          expect(result).to match(/<field name="parent_doc">true<\/field>/)
+        end
+
         it 'should create adds from multiple Message::Documents' do
           documents = (1..2).map do |i|
             doc = RSolr::Xml::Document.new
